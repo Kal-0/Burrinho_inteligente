@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="burrinho_inteligente.css">
+<title>Burrinho Inteligente — Implementação fiel</title>
+</head>
+<body>
+  <h1>Burrinho Inteligente — implementação completa</h1>
+
+  <div class="layout">
+    <div>
+      <div class="card controls">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <strong>Configurações & Controles</strong>
+          <span class="small">Dominó double-six (0..6)</span>
+        </div>
+
+        <div style="margin-top:8px">
+          <label><input type="checkbox" id="decideAntes" checked> Jogador decide <strong>antes</strong> de ver a peça</label>
+          <label><input type="checkbox" id="autoReveal" checked> Mostrar peça sorteada (quando aplicável)</label>
+
+          <div style="margin-top:8px" class="controls-row">
+            <button id="newGame" class="primary">Novo jogo</button>
+            <button id="startSim">Rodar simulação (auto)</button>
+            <button id="stepBtn">Próxima jogada</button>
+            <button id="resetBtn">Reset rápido</button>
+          </div>
+        </div>
+
+        <hr/>
+
+        <div class="status">
+          <div><strong>Turno:</strong> <span id="turnText" class="pill">—</span></div>
+          <div><strong>Peças no monte:</strong> <span id="pileCount">0</span></div>
+          <div><strong>Tamanho tabuleiro:</strong> <span id="boardSize">0</span></div>
+          <div><strong>Peça oculta atual:</strong> <span id="hiddenText">—</span></div>
+        </div>
+
+        <hr/>
+
+        <div class="players">
+          <div class="player-card">
+            <strong>Jogador A</strong>
+            <div class="small">Última peça: <span id="lastA">—</span></div>
+            <div class="small">Escolha atual: <span id="choiceA">—</span></div>
+            <div style="margin-top:8px">
+              <button id="chooseAInicio">A: Início</button>
+              <button id="chooseAFim">A: Fim</button>
+            </div>
+          </div>
+
+          <div class="player-card">
+            <strong>Jogador B</strong>
+            <div class="small">Última peça: <span id="lastB">—</span></div>
+            <div class="small">Escolha atual: <span id="choiceB">—</span></div>
+            <div style="margin-top:8px">
+              <button id="chooseBInicio">B: Início</button>
+              <button id="chooseBFim">B: Fim</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <strong>Registro (log)</strong>
+        <div id="log" class="log" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <strong>Tabuleiro</strong>
+        <div style="margin-top:8px" id="boardArea" class="board"></div>
+        <div style="margin-top:12px" class="small">Visualização linear: <em>esquerda → direita</em> (início → fim).</div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <strong>Controles do jogador</strong>
+        <div style="margin-top:8px">
+          <div style="display:flex;gap:8px;align-items:center">
+            <button id="drawHidden">Sortear peça (oculta)</button>
+            <button id="tryInicio">Tentar pelo Início</button>
+            <button id="tryFim">Tentar pelo Fim</button>
+          </div>
+          <div style="margin-top:8px" class="small">
+            Use <strong>Decidir antes</strong> para forçar a escolha antes do sorteio. 
+            O botão <em>Sortear peça (oculta)</em> mantém a peça até você clicar em <em>Tentar</em>.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <footer>Implementação conforme especificação: regras de inclusão, retorno numérico, flip/orientação, peça oculta, simulação.</footer>
+
+<script>
+/* ---------------------------
+   Modelos: Peca, CasaTabuleiro, Tabuleiro
+   --------------------------- */
+const CabecaPeca = ["BRANCO","PIO","DUQUE","TERNO","QUADRA","QUINA","SENA"];
+
+class Peca {
+  constructor(esq, dir){
+    this.esquerda = esq;
+    this.direita = dir;
+  }
+  clone(){ return new Peca(this.esquerda, this.direita); }
+  flipped(){ return new Peca(this.direita, this.esquerda); }
+  toString(){ return `${CabecaPeca[this.esquerda]}|${CabecaPeca[this.direita]}`; }
+  // testa se alguma cabeça bate com value
+  matchesHead(value){ return this.esquerda === value || this.direita === value; }
+}
+
+// nó duplamente encadeado
+class CasaTabuleiro {
+  constructor(peca){
+    this.peca = peca;
+    this.proximo = null;
+    this.anterior = null;
+  }
+}
+
+class Tabuleiro {
+  constructor(){
+    this.inicio = null;
+    this.fim = null;
+    this.tamanho = 0;
+  }
+
+  // transforma em array para visualização (cópia)
+  toArray(){
+    const arr = [];
+    let cur = this.inicio;
+    while(cur){
+      arr.push(cur.peca);
+      cur = cur.proximo;
+    }
+    return arr;
+  }
+
+  // ----- incluirDoInicio -----
+  // retorna conforme especificação:
+  // 0 => primeira peça (tabuleiro vazio)
+  // 1 => inserida como última (apêndice)
+  // 2 => inserida como primeira (novo início)
+  // >2 => inserida entre casas => tamanho - casasAndadas - 1
+  // -1 => não encaixou
+  incluirDoInicio(pecaOriginal){
+    // trabalhamos sempre com clones para não modificar objeto original (útil quando peça volta ao monte)
+    const peca = pecaOriginal.clone();
+
+    // caso vazio
+    if(this.tamanho === 0){
+      const casa = new CasaTabuleiro(peca);
+      this.inicio = casa;
+      this.fim = casa;
+      this.tamanho = 1;
+      return 0;
+    }
+
+    // caso tamanho == 1 -> regra especial: se encaixar, insere e retorno sempre 1
+    if(this.tamanho === 1){
+      const existing = this.inicio.peca;
+      if(peca.matchesHead(existing.esquerda) || peca.matchesHead(existing.direita)){
+        // inserir APÓS a peça existente (nova vira última)
+        // escolher orientação tal que new.esquerda == existing.direita (append semantics)
+        let toInsert = peca;
+        if(toInsert.esquerda !== existing.direita){
+          // tentar flipped, se não bater, ainda insere (porque matchesHead returned true => some head matches)
+          toInsert = toInsert.flipped();
+        }
+        const casa = new CasaTabuleiro(toInsert);
+        casa.anterior = this.fim;
+        this.fim.proximo = casa;
+        this.fim = casa;
+        this.tamanho = 2;
+        return 1;
+      } else {
+        return -1;
+      }
+    }
+
+    // size >= 2: varrimento a partir do INÍCIO
+    // 1) testar primeira casa: if inicio.peca.esquerda equals one head of new piece -> insert before first (ret 2)
+    const first = this.inicio.peca;
+    if(first.esquerda === peca.direita){ // orient to match new.direita == first.esquerda
+      const orient = peca.clone(); // already ok: direita == first.esquerda
+      const casa = new CasaTabuleiro(orient);
+      casa.proximo = this.inicio;
+      this.inicio.anterior = casa;
+      this.inicio = casa;
+      this.tamanho++;
+      return 2;
+    }
+    if(first.esquerda === peca.esquerda){
+      // need to flip so direita == first.esquerda
+      const orient = peca.flipped();
+      const casa = new CasaTabuleiro(orient);
+      casa.proximo = this.inicio;
+      this.inicio.anterior = casa;
+      this.inicio = casa;
+      this.tamanho++;
+      return 2;
+    }
+
+    // 2) testar última casa: if fim.peca.direita equals one head of new piece -> append (ret 1)
+    const last = this.fim.peca;
+    if(last.direita === peca.esquerda){
+      // orientation already matches new.esquerda == last.direita
+      const orient = peca.clone();
+      const casa = new CasaTabuleiro(orient);
+      casa.anterior = this.fim;
+      this.fim.proximo = casa;
+      this.fim = casa;
+      this.tamanho++;
+      return 1;
+    }
+    if(last.direita === peca.direita){
+      const orient = peca.flipped();
+      const casa = new CasaTabuleiro(orient);
+      casa.anterior = this.fim;
+      this.fim.proximo = casa;
+      this.fim = casa;
+      this.tamanho++;
+      return 1;
+    }
+
+    // 3) procurar entre casas: varrer do inicio até penúltima
+    let cur = this.inicio;
+    let index = 0;
+    const N = this.tamanho;
+    while(cur && cur.proximo){
+      const a = cur.peca.direita;
+      const b = cur.proximo.peca.esquerda;
+      // quer new.esquerda == a && new.direita == b
+      if( (peca.esquerda === a && peca.direita === b) ){
+        const orient = peca.clone();
+        // inserir entre cur e cur.proximo
+        const after = cur.proximo;
+        const casa = new CasaTabuleiro(orient);
+        cur.proximo = casa;
+        casa.anterior = cur;
+        casa.proximo = after;
+        after.anterior = casa;
+        // retorno = tamanho - casasAndadas - 1, casasAndadas = index+1
+        const casasAndadas = index + 1;
+        const retorno = N - casasAndadas - 1;
+        this.tamanho++;
+        return retorno;
+      }
+      if( (peca.direita === a && peca.esquerda === b) ){
+        // flipped orientation required so new.esquerda == a and new.direita == b
+        const orient = peca.flipped();
+        const after = cur.proximo;
+        const casa = new CasaTabuleiro(orient);
+        cur.proximo = casa;
+        casa.anterior = cur;
+        casa.proximo = after;
+        after.anterior = casa;
+        const casasAndadas = index + 1;
+        const retorno = N - casasAndadas - 1;
+        this.tamanho++;
+        return retorno;
+      }
+      cur = cur.proximo;
+      index++;
+    }
+
+    // não encaixou
+    return -1;
+  }
+
+  // ----- incluirDoFim -----
+  // comportamento simétrico, mas varrendo do fim; porém cálculo de retorno usa índice equivalente
+  incluirDoFim(pecaOriginal){
+    const peca = pecaOriginal.clone();
+
+    // caso vazio
+    if(this.tamanho === 0){
+      const casa = new CasaTabuleiro(peca);
+      this.inicio = casa;
+      this.fim = casa;
+      this.tamanho = 1;
+      return 0;
+    }
+
+    // caso tamanho == 1 -> regra especial: se encaixar, insere e retorno sempre 1
+    if(this.tamanho === 1){
+      const existing = this.inicio.peca;
+      if(peca.matchesHead(existing.esquerda) || peca.matchesHead(existing.direita)){
+        // inserir ANTES da peça existente (nova vira novo início) — semantics for incluirDoFim special case
+        // orientation: want new.direita == existing.esquerda (so new is before existing)
+        let toInsert = peca;
+        if(toInsert.direita !== existing.esquerda){
+          toInsert = toInsert.flipped();
+        }
+        const casa = new CasaTabuleiro(toInsert);
+        casa.proximo = this.inicio;
+        this.inicio.anterior = casa;
+        this.inicio = casa;
+        this.tamanho = 2;
+        return 1;
+      } else {
+        return -1;
+      }
+    }
+
+    // size >= 2: varredura a partir do FIM
+    // 1) testar ultima casa: se fim.peca.direita equals some head of new piece -> append (ret 1)
+    const last = this.fim.peca;
+    if(last.direita === peca.esquerda){
+      // already oriented
+      const orient = peca.clone();
+      const casa = new CasaTabuleiro(orient);
+      casa.anterior = this.fim;
+      this.fim.proximo = casa;
+      this.fim = casa;
+      this.tamanho++;
+      return 1;
+    }
+    if(last.direita === peca.direita){
+      const orient = peca.flipped();
+      const casa = new CasaTabuleiro(orient);
+      casa.anterior = this.fim;
+      this.fim.proximo = casa;
+      this.fim = casa;
+      this.tamanho++;
+      return 1;
+    }
+
+    // 2) testar primeira casa: if inicio.peca.esquerda equals some head of new piece -> insert before first (ret 2)
+    const first = this.inicio.peca;
+    if(first.esquerda === peca.direita){
+      const orient = peca.clone();
+      const casa = new CasaTabuleiro(orient);
+      casa.proximo = this.inicio;
+      this.inicio.anterior = casa;
+      this.inicio = casa;
+      this.tamanho++;
+      return 2;
+    }
+    if(first.esquerda === peca.esquerda){
+      const orient = peca.flipped();
+      const casa = new CasaTabuleiro(orient);
+      casa.proximo = this.inicio;
+      this.inicio.anterior = casa;
+      this.inicio = casa;
+      this.tamanho++;
+      return 2;
+    }
+
+    // 3) procurar entre casas, varrendo do fim para início
+    let cur = this.fim;
+    let stepsFromEnd = 0; // 0 -> cur is last (index N-1)
+    const N = this.tamanho;
+    while(cur && cur.anterior){
+      // estamos analisando par entre cur.anterior (index k-1) e cur (index k)
+      // queremos new.esquerda == cur.anterior.peca.direita (call a) and new.direita == cur.peca.esquerda (call b)
+      const a = cur.anterior.peca.direita;
+      const b = cur.peca.esquerda;
+      // compute current index k (index of cur)
+      const k = N - 1 - stepsFromEnd;
+
+      if( (peca.esquerda === a && peca.direita === b) ){
+        const orient = peca.clone();
+        // inserir entre cur.anterior e cur
+        const before = cur.anterior;
+        const casa = new CasaTabuleiro(orient);
+        before.proximo = casa;
+        casa.anterior = before;
+        casa.proximo = cur;
+        cur.anterior = casa;
+        // retorno = tamanho - quantidade_casas_andadas - 1
+        // quando varremos do fim, o spec pede contar casasAndadas a partir do fim; mas para garantir consistência
+        // usamos a formula equivalente usando index k of cur: the pair is between k-1 and k, so retorno = N - k - 1
+        const retorno = N - k - 1;
+        this.tamanho++;
+        return retorno;
+      }
+      if( (peca.direita === a && peca.esquerda === b) ){
+        const orient = peca.flipped();
+        const before = cur.anterior;
+        const casa = new CasaTabuleiro(orient);
+        before.proximo = casa;
+        casa.anterior = before;
+        casa.proximo = cur;
+        cur.anterior = casa;
+        const retorno = N - k - 1;
+        this.tamanho++;
+        return retorno;
+      }
+
+      cur = cur.anterior;
+      stepsFromEnd++;
+    }
+
+    // não encaixou
+    return -1;
+  }
+}
+
+/* ---------------------------
+   BurrinhoInteligente (Jogo)
+   --------------------------- */
+class BurrinhoInteligente {
+  constructor(){
+    this.tabuleiro = new Tabuleiro();
+    this.resetMonte();
+    this.jogadores = [{nome:'A'},{nome:'B'}];
+    this.turno = 0; // 0=A,1=B
+    this.hiddenPiece = null; // peça retirada e mantida oculta (quando aplicável)
+    this.history = [];
+  }
+
+  resetMonte(){
+    this.monte = [];
+    for(let i=0;i<=6;i++){
+      for(let j=i;j<=6;j++){
+        this.monte.push(new Peca(i,j));
+      }
+    }
+    this.shuffleMonte();
+  }
+
+  shuffleMonte(){
+    for(let i=this.monte.length-1;i>0;i--){
+      const r = Math.floor(Math.random()*(i+1));
+      [this.monte[i], this.monte[r]] = [this.monte[r], this.monte[i]];
+    }
+  }
+
+  monteCount(){ return this.monte.length; }
+  boardSize(){ return this.tabuleiro.tamanho; }
+
+  // retira aleatoriamente do monte (remove e retorna a peça)
+  drawRandom(){
+    if(this.monte.length === 0) return null;
+    const idx = Math.floor(Math.random()*this.monte.length);
+    return this.monte.splice(idx,1)[0];
+  }
+
+  // guarda peça oculta (não devolve ao monte)
+  drawHidden(){
+    if(this.hiddenPiece) return {ok:false, reason:'Já existe peça oculta'};
+    const p = this.drawRandom();
+    if(!p) return {ok:false, reason:'monte vazio'};
+    this.hiddenPiece = p;
+    return {ok:true, piece:p};
+  }
+
+  // se a peça estava oculta e não encaixou, devolve ao monte
+  returnHiddenToMonte(){
+    if(!this.hiddenPiece) return;
+    this.monte.push(this.hiddenPiece);
+    this.shuffleMonte();
+    this.hiddenPiece = null;
+  }
+
+  // jogador atual tenta com a peça oculta (se houver) ou com nova retirada interna
+  // decision: 'inicio'|'fim'
+  // revealOnLog: se true, colocamos a peça no log detalhada
+  // Retorna objeto com detalhes: {ok, encaixou, retorno, peca, reason}
+  attemptWithDecision(decision, revealOnLog=true){
+    // se não existe hiddenPiece, pegamos uma do monte (a semântica: sempre tirar, mas modo jogador pode ter tirado antes)
+    let takenFromHidden = true;
+    let p;
+    if(this.hiddenPiece){
+      p = this.hiddenPiece;
+      takenFromHidden = true;
+      // we'll replace this.hiddenPiece = null only after we decide (we want to remove it if used)
+    } else {
+      p = this.drawRandom();
+      takenFromHidden = false;
+    }
+
+    if(!p) return {ok:false, reason:'monte vazio'};
+
+    // registro jogador atual (antes de avançar o turno)
+    const jogador = this.turno === 0 ? 'A' : 'B';
+
+    // tentar encaixar usando clones (para não estragar p caso precise voltar ao monte)
+    let retorno;
+    if(decision === 'inicio'){
+      retorno = this.tabuleiro.incluirDoInicio(p.clone());
+    } else {
+      retorno = this.tabuleiro.incluirDoFim(p.clone());
+    }
+
+    if(retorno >= 0){
+      // encaixou: peça fica no tabuleiro permanentemente
+      // limpar hiddenPiece se era a oculta
+      if(takenFromHidden) this.hiddenPiece = null;
+      // avançar turno
+      this.history.push({player:jogador, decision, pecaShown: p.toString(), encaixou:true, retorno});
+      // advance turn AFTER logging
+      this._advanceTurn();
+      return {ok:true, encaixou:true, retorno, peca:p};
+    } else {
+      // não encaixou: peça volta ao monte (se veio oculta, devolvemos; se veio direto do monte, também devolvemos)
+      if(takenFromHidden){
+        // devolve a peça ao monte e limpa hidden
+        this.monte.push(this.hiddenPiece);
+        this.shuffleMonte();
+        this.hiddenPiece = null;
+      } else {
+        this.monte.push(p);
+        this.shuffleMonte();
+      }
+      this.history.push({player:jogador, decision, pecaShown: p.toString(), encaixou:false, retorno});
+      this._advanceTurn();
+      return {ok:true, encaixou:false, retorno, peca:p};
+    }
+  }
+
+  _advanceTurn(){ this.turno = 1 - this.turno; }
+
+  isOver(){ return this.monte.length === 0 && this.hiddenPiece === null; }
+
+  // util: roda uma jogada automática (escolha aleatória)
+  autoStep(){
+    if(this.isOver()) return {ok:false, reason:'fim'};
+    const decision = Math.random() < 0.5 ? 'inicio' : 'fim';
+    // for auto step we always draw immediately
+    return this.attemptWithDecision(decision, true);
+  }
+}
+
+/* ---------------------------
+   UI & Ligação
+   --------------------------- */
+const game = new BurrinhoInteligente();
+
+// elementos
+const logEl = document.getElementById('log');
+const pileCountEl = document.getElementById('pileCount');
+const boardSizeEl = document.getElementById('boardSize');
+const turnText = document.getElementById('turnText');
+const boardArea = document.getElementById('boardArea');
+const hiddenText = document.getElementById('hiddenText');
+const lastA = document.getElementById('lastA');
+const lastB = document.getElementById('lastB');
+const choiceAEl = document.getElementById('choiceA');
+const choiceBEl = document.getElementById('choiceB');
+
+function appendLog(txt){
+  const time = new Date().toLocaleTimeString();
+  logEl.innerText = `[${time}] ${txt}\n\n` + logEl.innerText;
+}
+
+function renderBoard(){
+  boardArea.innerHTML = '';
+  const arr = game.tabuleiro.toArray();
+  arr.forEach(p => {
+    const d = document.createElement('div');
+    d.className = 'domino';
+    d.innerHTML = `<div class="half">${CabecaPeca[p.esquerda]}</div><div class="half">${CabecaPeca[p.direita]}</div>`;
+    boardArea.appendChild(d);
+  });
+  boardSizeEl.innerText = arr.length;
+}
+
+function refreshUI(){
+  pileCountEl.innerText = game.monteCount();
+  turnText.innerText = game.turno === 0 ? 'A' : 'B';
+  hiddenText.innerText = game.hiddenPiece ? (document.getElementById('autoReveal').checked ? game.hiddenPiece.toString() : 'OCULTA') : '—';
+  renderBoard();
+}
+
+// botões de escolha (cada jogador tem sua escolha independente)
+document.getElementById('chooseAInicio').addEventListener('click', ()=>{ choiceAEl.innerText = 'inicio'; appendLog('Jogador A escolheu INÍCIO (visível).'); });
+document.getElementById('chooseAFim').addEventListener('click', ()=>{ choiceAEl.innerText = 'fim'; appendLog('Jogador A escolheu FIM (visível).'); });
+document.getElementById('chooseBInicio').addEventListener('click', ()=>{ choiceBEl.innerText = 'inicio'; appendLog('Jogador B escolheu INÍCIO (visível).'); });
+document.getElementById('chooseBFim').addEventListener('click', ()=>{ choiceBEl.innerText = 'fim'; appendLog('Jogador B escolheu FIM (visível).'); });
+
+// novo jogo
+document.getElementById('newGame').addEventListener('click', ()=>{
+  game.tabuleiro = new Tabuleiro();
+  game.resetMonte();
+  game.turno = 0;
+  game.hiddenPiece = null;
+  game.history = [];
+  logEl.innerText = '';
+  choiceAEl.innerText = choiceBEl.innerText = '-';
+  lastA.innerText = lastB.innerText = '-';
+  appendLog('Novo jogo iniciado.');
+  refreshUI();
+});
+
+// reset rápido
+document.getElementById('resetBtn').addEventListener('click', ()=> location.reload() );
+
+// sortear peça oculta (mantém a peça até a tentativa)
+document.getElementById('drawHidden').addEventListener('click', ()=>{
+  const res = game.drawHidden();
+  if(!res.ok) { appendLog('Não foi possível sortear (já existe peça oculta ou monte vazio).'); refreshUI(); return; }
+  appendLog(`Peça retirada e mantida oculta para jogador ${game.turno===0?'A':'B'}.`);
+  refreshUI();
+});
+
+// tentar pelo início / fim (usa peça oculta se houver, caso contrário retira uma peça)
+document.getElementById('tryInicio').addEventListener('click', ()=>{ tryDecision('inicio'); });
+document.getElementById('tryFim').addEventListener('click', ()=>{ tryDecision('fim'); });
+
+function tryDecision(decision){
+  // se decideAntes está marcado, forçamos que escolha vinha do choice do jogador atual
+  const decideAntes = document.getElementById('decideAntes').checked;
+  const current = game.turno === 0 ? 'A' : 'B';
+  const visibleChoice = current === 'A' ? choiceAEl.innerText : choiceBEl.innerText;
+
+  if(decideAntes){
+    if(!(visibleChoice === 'inicio' || visibleChoice === 'fim')){
+      appendLog(`Modo "decidir antes" ativo — jogador ${current} precisa escolher INÍCIO ou FIM com os botões ao lado antes de tentar.`)
+      return;
+    }
+    if(visibleChoice !== decision){
+      appendLog(`Aviso: jogador ${current} já escolheu ${visibleChoice}. Para forçar ${decision}, clique no botão correspondente antes.`);
+      return;
+    }
+  }
+
+  // tentar
+  const res = game.attemptWithDecision(decision, document.getElementById('autoReveal').checked);
+  if(!res.ok){
+    appendLog('Ação não realizada: ' + (res.reason || 'motivo desconhecido'));
+    refreshUI();
+    return;
+  }
+
+  // log e UI
+  appendLog(`Jogador ${current} tentou pelo ${decision} — peça: ${res.peca.toString()} — encaixou: ${res.encaixou} (retorno: ${res.retorno})`);
+  if(current === 'A'){ lastA.innerText = res.peca.toString(); choiceAEl.innerText = decision; }
+  else { lastB.innerText = res.peca.toString(); choiceBEl.innerText = decision; }
+
+  refreshUI();
+  if(game.isOver()){
+    appendLog('Jogo acabou — monte vazio e nenhuma peça oculta.');
+  }
+}
+
+// passo único (usado por botão Próxima jogada)
+function stepOnce(){
+  if(game.isOver()){ appendLog('Jogo já acabou.'); return; }
+
+  const decideAntes = document.getElementById('decideAntes').checked;
+  const autoReveal = document.getElementById('autoReveal').checked;
+  const current = game.turno === 0 ? 'A' : 'B';
+
+  // decisão: se decideAntes -> usar escolha visível do jogador (se existir), senão aleatório
+  let decision;
+  const visibleChoice = current === 'A' ? choiceAEl.innerText : choiceBEl.innerText;
+  if(decideAntes && (visibleChoice === 'inicio' || visibleChoice === 'fim')){
+    decision = visibleChoice;
+    appendLog(`Jogador ${current} (escolha visível) decidiu tentar pelo ${decision}.`);
+  } else {
+    // se existe peça oculta, mantemos e usamos a escolha visível se houver; caso contrário aleatório
+    if(game.hiddenPiece){
+      if(visibleChoice === 'inicio' || visibleChoice === 'fim'){
+        decision = visibleChoice;
+        appendLog(`Jogador ${current} tem peça oculta e decidiu tentar pelo ${decision} (visível).`);
+      } else {
+        decision = Math.random() < 0.5 ? 'inicio' : 'fim';
+        appendLog(`Jogador ${current} tem peça oculta e escolheu aleatoriamente ${decision}.`);
+      }
+    } else {
+      // sem peça oculta: se decideAntes and no visibleChoice -> alert user; but per spec we can randomize
+      if(decideAntes && !(visibleChoice==='inicio' || visibleChoice==='fim')){
+        // for UX, vamos escolher aleatório e logar que não havia escolha explícita
+        decision = Math.random() < 0.5 ? 'inicio' : 'fim';
+        appendLog(`Jogador ${current} não escolheu (modo decidir antes). Escolha aleatória: ${decision}.`);
+      } else {
+        decision = Math.random() < 0.5 ? 'inicio' : 'fim';
+        appendLog(`Jogador ${current} (simulação/aleatório) decidiu tentar pelo ${decision}.`);
+      }
+    }
+  }
+
+  // executar: se não houver peça oculta, attemptWithDecision cuidará de retirar do monte
+  const r = game.attemptWithDecision(decision, autoReveal);
+  if(!r.ok){
+    appendLog('Passo não realizado: ' + (r.reason || 'motivo desconhecido'));
+    refreshUI();
+    return;
+  }
+  appendLog(`Jogador ${current} sorteou ${r.peca.toString()} e tentou pelo ${decision}. Encaixou: ${r.encaixou} (retorno:${r.retorno})`);
+  if(current==='A'){ lastA.innerText = r.peca.toString(); choiceAEl.innerText = decision; } else { lastB.innerText = r.peca.toString(); choiceBEl.innerText = decision; }
+  refreshUI();
+  if(game.isOver()) appendLog('Jogo finalizado — monte vazio e sem peças ocultas.');
+}
+
+// botão Próxima jogada
+document.getElementById('stepBtn').addEventListener('click', ()=> stepOnce() );
+
+// simulação automática
+let autoSimInterval = null;
+document.getElementById('startSim').addEventListener('click', ()=>{
+  if(autoSimInterval){
+    clearInterval(autoSimInterval);
+    autoSimInterval = null;
+    document.getElementById('startSim').innerText = 'Rodar simulação (auto)';
+    appendLog('Simulação automática parada.');
+    return;
+  }
+  document.getElementById('startSim').innerText = 'Parar simulação';
+  appendLog('Simulação automática iniciada.');
+  autoSimInterval = setInterval(()=>{
+    if(game.isOver()){
+      appendLog('Simulação finalizada (monte vazio).');
+      clearInterval(autoSimInterval);
+      autoSimInterval = null;
+      document.getElementById('startSim').innerText = 'Rodar simulação (auto)';
+      refreshUI();
+      return;
+    }
+    // cada passo: decisão aleatória e execução
+    stepOnce();
+  }, 120);
+});
+
+// inicialização automática de novo jogo
+document.getElementById('newGame').click();
+refreshUI();
+</script>
+</body>
+</html>
